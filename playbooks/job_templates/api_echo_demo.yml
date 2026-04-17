@@ -1,0 +1,19 @@
+---
+- name: Run API echo demo module
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Call httpbin endpoint
+      demo.api_demo.api_echo:
+        url: https://httpbin.org/anything
+        method: GET
+        params:
+          source: awx_job_template
+      register: api_echo_result
+
+    - name: Display module output summary
+      ansible.builtin.debug:
+        msg:
+          status_code: "{{ api_echo_result.status_code }}"
+          elapsed_ms: "{{ api_echo_result.elapsed_ms }}"
+          url: "{{ api_echo_result.request_summary.url }}"

@@ -1,0 +1,16 @@
+---
+- name: Local test for demo.api_demo collection
+  hosts: local
+  gather_facts: false
+  tasks:
+    - name: Call demo module locally
+      demo.api_demo.api_echo:
+        url: https://httpbin.org/anything
+        method: GET
+        params:
+          source: local_test
+      register: api_echo_result
+
+    - name: Show result
+      ansible.builtin.debug:
+        var: api_echo_result

@@ -1,0 +1,14 @@
+---
+awx_org_name: "Demo Org"
+awx_project_name: "API Demo Project"
+awx_project_description: "Project containing demo collection and AWX job playbooks"
+
+awx_execution_environment_name: "API Demo EE"
+awx_execution_environment_image: "docker.io/<docker-user>/awx-ee-api-demo:v1"
+
+awx_inventory_name: "Demo Inventory"
+awx_inventory_description: "Localhost inventory for API echo demo"
+
+awx_job_template_name: "API Echo Demo"
+awx_job_template_description: "Runs demo.api_demo.api_echo from custom EE"
+awx_job_template_playbook: "playbooks/job_templates/api_echo_demo.yml"

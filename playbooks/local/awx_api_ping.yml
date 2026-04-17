@@ -1,0 +1,20 @@
+---
+- name: Validate AWX API connectivity
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: Query AWX ping endpoint directly
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/ping/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_oauth_token }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        return_content: true
+        status_code: 200
+      register: awx_ping
+
+    - name: Print AWX ping response
+      ansible.builtin.debug:
+        var: awx_ping.json

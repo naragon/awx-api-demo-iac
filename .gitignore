@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Ansible
+*.retry
+
+# Local secrets/overrides
+inventories/group_vars/all/awx.yml
+.env
+
+# Build output
+context/
+_build/
+Dockerfile
+
+# Local installed collections
+collections/ansible_collections/awx/
+collections/ansible_collections/*.info/

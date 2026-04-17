@@ -1,0 +1,16 @@
+namespace: demo
+name: api_demo
+version: 0.1.0
+readme: README.md
+authors:
+  - naragon
+license:
+  - MIT
+repository: https://example.invalid/demo/api_demo
+issues: https://example.invalid/demo/api_demo/issues
+description: Demo collection with a simple API-calling module for AWX execution environment validation.
+tags:
+  - demo
+  - api
+  - awx
+  - ee

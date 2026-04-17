@@ -1,0 +1,19 @@
+---
+- name: Demo api_echo module
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Call demo API endpoint
+      demo.api_demo.api_echo:
+        url: https://httpbin.org/anything
+        method: GET
+        params:
+          from: collection_playbook
+      register: api_response
+
+    - name: Print response summary
+      ansible.builtin.debug:
+        msg:
+          status_code: "{{ api_response.status_code }}"
+          elapsed_ms: "{{ api_response.elapsed_ms }}"
+          url: "{{ api_response.request_summary.url }}"

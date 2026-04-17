@@ -1,0 +1,26 @@
+---
+- name: Launch demo job template
+  hosts: local
+  gather_facts: false
+  vars_files:
+    - ../../vars/awx_resources.yml
+  collections:
+    - awx.awx
+
+  tasks:
+    - name: Launch API Echo Demo template
+      awx.awx.job_launch:
+        controller_host: "{{ awx_host }}"
+        controller_oauthtoken: "{{ awx_oauth_token }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        name: "{{ awx_job_template_name }}"
+        organization: "{{ awx_org_name }}"
+        wait: true
+      register: launch_result
+
+    - name: Show launch result summary
+      ansible.builtin.debug:
+        msg:
+          status: "{{ launch_result.status | default('unknown') }}"
+          id: "{{ launch_result.id | default('n/a') }}"
+          elapsed: "{{ launch_result.elapsed | default('n/a') }}"

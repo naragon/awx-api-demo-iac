@@ -1,0 +1,8 @@
+---
+awx_host: "https://awx.local"
+awx_validate_certs: false
+awx_oauth_token: "{{ lookup('ansible.builtin.env', 'AWX_OAUTH_TOKEN') }}"
+
+# Used by AWX project sync (repo containing playbooks)
+awx_project_scm_url: "https://github.com/<your-user>/awx-api-demo-iac.git"
+awx_project_scm_branch: "main"

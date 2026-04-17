@@ -1,0 +1,14 @@
+[project]
+name = "awx-api-demo-iac"
+version = "0.1.0"
+description = "Demo AWX IaC/CaC project with a custom Ansible collection and custom execution environment"
+requires-python = ">=3.11"
+dependencies = [
+  "ansible-builder>=3.1.0",
+  "ansible-core>=2.15",
+  "awxkit>=24.6.1",
+  "requests>=2.31.0",
+]
+
+[tool.uv]
+package = false

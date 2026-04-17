@@ -1,0 +1,7 @@
+---
+awx_host: "{{ lookup('ansible.builtin.env', 'AWX_HOST') | default('', true) }}"
+awx_validate_certs: false
+awx_oauth_token: "{{ lookup('ansible.builtin.env', 'AWX_OAUTH_TOKEN') | default('', true) }}"
+
+awx_project_scm_url: ""
+awx_project_scm_branch: "main"
