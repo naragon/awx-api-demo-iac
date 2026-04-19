@@ -4,7 +4,12 @@ awx_project_name: "API Demo Project"
 awx_project_description: "Project containing demo collection and AWX job playbooks"
 
 awx_execution_environment_name: "API Demo EE"
-awx_execution_environment_image: "docker.io/<docker-user>/awx-ee-api-demo:v1"
+awx_execution_environment_image: "docker.io/naragon/awx-ee-api-demo:v1"
+
+# Set to false when token lacks permission to manage /api/v2/execution_environments/
+awx_manage_execution_environment: true
+# Use an existing EE name (e.g. "Default execution environment") when not managing EE
+awx_job_template_execution_environment: "API Demo EE"
 
 awx_inventory_name: "Demo Inventory"
 awx_inventory_description: "Localhost inventory for API echo demo"

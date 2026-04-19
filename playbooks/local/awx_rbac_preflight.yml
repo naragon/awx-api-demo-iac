@@ -1,0 +1,61 @@
+---
+- name: AWX RBAC/API preflight matrix
+  hosts: local
+  gather_facts: false
+  vars:
+    awx_preflight_endpoints:
+      - organizations
+      - projects
+      - inventories
+      - job_templates
+      - execution_environments
+
+  pre_tasks:
+    - name: Validate required AWX connection variables
+      ansible.builtin.assert:
+        that:
+          - awx_host | length > 0
+          - awx_oauth_token | length > 0
+        fail_msg: "Set AWX_HOST and AWX_OAUTH_TOKEN"
+
+  tasks:
+    - name: Check endpoint access
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/{{ item }}/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_oauth_token | trim }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        return_content: false
+        status_code:
+          - 200
+          - 401
+          - 403
+          - 404
+      loop: "{{ awx_preflight_endpoints }}"
+      loop_control:
+        label: "/api/v2/{{ item }}/"
+      register: awx_preflight_results
+
+    - name: Print access matrix
+      ansible.builtin.debug:
+        msg: >-
+          {{ '%-28s' | format('/api/v2/' ~ item.item ~ '/') }} -> HTTP {{ item.status }}
+      loop: "{{ awx_preflight_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Build denied endpoint list
+      ansible.builtin.set_fact:
+        awx_denied_endpoints: >-
+          {{ awx_preflight_results.results
+             | selectattr('status', 'equalto', 403)
+             | map(attribute='item')
+             | list }}
+
+    - name: Guidance when some endpoints are forbidden
+      ansible.builtin.debug:
+        msg:
+          - "403 denied endpoints: {{ awx_denied_endpoints | join(', ') }}"
+          - "Use an admin token, or run bootstrap with feature flags to skip forbidden resources."
+      when: awx_denied_endpoints | length > 0

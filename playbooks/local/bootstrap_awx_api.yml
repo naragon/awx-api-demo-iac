@@ -1,0 +1,338 @@
+---
+- name: Bootstrap AWX resources via direct AWX REST API
+  hosts: local
+  gather_facts: false
+  vars_files:
+    - ../../vars/awx_resources.yml
+  vars:
+    awx_manage_organization: false
+    awx_manage_execution_environment_effective: "{{ awx_manage_execution_environment | default(true) }}"
+    awx_job_template_execution_environment_effective: "{{ awx_job_template_execution_environment | default(awx_execution_environment_name) }}"
+
+  pre_tasks:
+    - name: Validate required AWX connection variables
+      ansible.builtin.assert:
+        that:
+          - awx_host | length > 0
+          - awx_oauth_token | length > 0
+          - awx_project_scm_url | length > 0
+        fail_msg: "Set AWX_HOST, AWX_OAUTH_TOKEN, and awx_project_scm_url"
+
+    - name: Set AWX API headers
+      ansible.builtin.set_fact:
+        awx_api_headers:
+          Authorization: "Bearer {{ awx_oauth_token | trim }}"
+          Content-Type: application/json
+
+  tasks:
+    - name: Lookup organization by explicit ID
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/organizations/{{ awx_org_id }}/"
+        method: GET
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code: 200
+      when: awx_org_id is defined
+      register: org_by_id
+
+    - name: Lookup organization by name
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/organizations/?name={{ awx_org_name | urlencode }}"
+        method: GET
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code: 200
+      when: awx_org_id is not defined
+      register: org_by_name
+
+    - name: Create organization when requested and missing
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/organizations/"
+        method: POST
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          name: "{{ awx_org_name }}"
+        status_code: 201
+      when:
+        - awx_org_id is not defined
+        - awx_manage_organization | bool
+        - (org_by_name.json.count | int) == 0
+      register: org_created
+
+    - name: Fail if organization was not found and create is disabled
+      ansible.builtin.fail:
+        msg: "Organization '{{ awx_org_name }}' not found. Re-run with -e awx_manage_organization=true or set -e awx_org_id=<id>."
+      when:
+        - awx_org_id is not defined
+        - (org_by_name.json.count | int) == 0
+        - not (awx_manage_organization | bool)
+
+    - name: Set resolved organization ID
+      ansible.builtin.set_fact:
+        awx_organization_id: >-
+          {{
+            (awx_org_id | int)
+            if (awx_org_id is defined)
+            else (
+              (org_created.json.id | int)
+              if (org_created is defined and org_created.json is defined)
+              else (org_by_name.json.results[0].id | int)
+            )
+          }}
+
+    - name: Lookup execution environment by name
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/execution_environments/?name={{ awx_execution_environment_name | urlencode }}"
+        method: GET
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code:
+          - 200
+          - 403
+      register: ee_lookup
+
+    - name: Create execution environment when enabled and missing
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/execution_environments/"
+        method: POST
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          name: "{{ awx_execution_environment_name }}"
+          image: "{{ awx_execution_environment_image }}"
+          organization: "{{ awx_organization_id }}"
+          pull: always
+        status_code: 201
+      when:
+        - awx_manage_execution_environment_effective | bool
+        - ee_lookup.status | int == 200
+        - (ee_lookup.json.count | int) == 0
+      register: ee_created
+
+    - name: Set resolved execution environment ID
+      ansible.builtin.set_fact:
+        awx_execution_environment_id: >-
+          {{
+            (ee_created.json.id | int)
+            if (ee_created is defined and ee_created.json is defined)
+            else (ee_lookup.json.results[0].id | int)
+          }}
+      when:
+        - awx_manage_execution_environment_effective | bool
+        - (ee_created is defined and ee_created.json is defined) or (ee_lookup.status | int == 200 and (ee_lookup.json.count | int) > 0)
+
+    - name: Lookup project by name and organization
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/projects/?name={{ awx_project_name | urlencode }}&organization={{ awx_organization_id }}"
+        method: GET
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code: 200
+      register: project_lookup
+
+    - name: Create project
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/projects/"
+        method: POST
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          name: "{{ awx_project_name }}"
+          description: "{{ awx_project_description }}"
+          organization: "{{ awx_organization_id }}"
+          scm_type: git
+          scm_url: "{{ awx_project_scm_url }}"
+          scm_branch: "{{ awx_project_scm_branch }}"
+          scm_update_on_launch: true
+        status_code: 201
+      when: (project_lookup.json.count | int) == 0
+      register: project_created
+
+    - name: Update existing project
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/projects/{{ project_lookup.json.results[0].id }}/"
+        method: PATCH
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          description: "{{ awx_project_description }}"
+          scm_type: git
+          scm_url: "{{ awx_project_scm_url }}"
+          scm_branch: "{{ awx_project_scm_branch }}"
+          scm_update_on_launch: true
+        status_code: 200
+      when: (project_lookup.json.count | int) > 0
+      register: project_updated
+
+    - name: Set resolved project ID
+      ansible.builtin.set_fact:
+        awx_project_id: >-
+          {{
+            (project_created.json.id | int)
+            if (project_created is defined and project_created.json is defined)
+            else (project_lookup.json.results[0].id | int)
+          }}
+
+    - name: Lookup inventory by name and organization
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/inventories/?name={{ awx_inventory_name | urlencode }}&organization={{ awx_organization_id }}"
+        method: GET
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code: 200
+      register: inventory_lookup
+
+    - name: Create inventory
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/inventories/"
+        method: POST
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          name: "{{ awx_inventory_name }}"
+          description: "{{ awx_inventory_description }}"
+          organization: "{{ awx_organization_id }}"
+        status_code: 201
+      when: (inventory_lookup.json.count | int) == 0
+      register: inventory_created
+
+    - name: Set resolved inventory ID
+      ansible.builtin.set_fact:
+        awx_inventory_id: >-
+          {{
+            (inventory_created.json.id | int)
+            if (inventory_created is defined and inventory_created.json is defined)
+            else (inventory_lookup.json.results[0].id | int)
+          }}
+
+    - name: Lookup localhost host in inventory
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/hosts/?name=localhost&inventory={{ awx_inventory_id }}"
+        method: GET
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code: 200
+      register: host_lookup
+
+    - name: Create localhost host
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/hosts/"
+        method: POST
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          name: localhost
+          inventory: "{{ awx_inventory_id }}"
+          enabled: true
+          variables: |
+            ansible_connection: local
+        status_code: 201
+      when: (host_lookup.json.count | int) == 0
+
+    - name: Lookup job template by name and organization
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/job_templates/?name={{ awx_job_template_name | urlencode }}&organization={{ awx_organization_id }}"
+        method: GET
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code: 200
+      register: jt_lookup
+
+    - name: Create job template with explicit EE
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/job_templates/"
+        method: POST
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          name: "{{ awx_job_template_name }}"
+          description: "{{ awx_job_template_description }}"
+          organization: "{{ awx_organization_id | int }}"
+          project: "{{ awx_project_id | int }}"
+          inventory: "{{ awx_inventory_id | int }}"
+          playbook: "{{ awx_job_template_playbook }}"
+          execution_environment: "{{ awx_execution_environment_id | int }}"
+          ask_variables_on_launch: false
+        status_code: 201
+      when:
+        - (jt_lookup.json.count | int) == 0
+        - awx_execution_environment_id is defined
+        - awx_job_template_execution_environment_effective | length > 0
+
+    - name: Create job template using AWX default EE
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/job_templates/"
+        method: POST
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          name: "{{ awx_job_template_name }}"
+          description: "{{ awx_job_template_description }}"
+          organization: "{{ awx_organization_id | int }}"
+          project: "{{ awx_project_id | int }}"
+          inventory: "{{ awx_inventory_id | int }}"
+          playbook: "{{ awx_job_template_playbook }}"
+          ask_variables_on_launch: false
+        status_code: 201
+      when:
+        - (jt_lookup.json.count | int) == 0
+        - not (awx_execution_environment_id is defined and awx_job_template_execution_environment_effective | length > 0)
+
+    - name: Update existing job template with explicit EE
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/job_templates/{{ jt_lookup.json.results[0].id }}/"
+        method: PATCH
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          description: "{{ awx_job_template_description }}"
+          project: "{{ awx_project_id | int }}"
+          inventory: "{{ awx_inventory_id | int }}"
+          playbook: "{{ awx_job_template_playbook }}"
+          execution_environment: "{{ awx_execution_environment_id | int }}"
+          ask_variables_on_launch: false
+        status_code: 200
+      when:
+        - (jt_lookup.json.count | int) > 0
+        - awx_execution_environment_id is defined
+        - awx_job_template_execution_environment_effective | length > 0
+
+    - name: Update existing job template using AWX default EE
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/job_templates/{{ jt_lookup.json.results[0].id }}/"
+        method: PATCH
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          description: "{{ awx_job_template_description }}"
+          project: "{{ awx_project_id | int }}"
+          inventory: "{{ awx_inventory_id | int }}"
+          playbook: "{{ awx_job_template_playbook }}"
+          ask_variables_on_launch: false
+        status_code: 200
+      when:
+        - (jt_lookup.json.count | int) > 0
+        - not (awx_execution_environment_id is defined and awx_job_template_execution_environment_effective | length > 0)
+
+    - name: Launch project update
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/projects/{{ awx_project_id }}/update/"
+        method: POST
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body: {}
+        status_code:
+          - 202
+          - 201

@@ -1,0 +1,118 @@
+---
+- name: Ensure EE exists and patch job template to use it
+  hosts: local
+  gather_facts: false
+  vars_files:
+    - ../../vars/awx_resources.yml
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - awx_host | length > 0
+          - awx_oauth_token | length > 0
+          - awx_org_id is defined
+          - awx_execution_environment_name | length > 0
+          - awx_execution_environment_image | length > 0
+          - awx_job_template_name | length > 0
+        fail_msg: >-
+          Set AWX_HOST, AWX_OAUTH_TOKEN, awx_org_id,
+          awx_execution_environment_name, awx_execution_environment_image,
+          and awx_job_template_name.
+
+    - name: Verify EE image exists in registry
+      ansible.builtin.command:
+        cmd: "docker manifest inspect {{ awx_execution_environment_image }}"
+      register: image_manifest
+      changed_when: false
+
+    - name: Set AWX API headers
+      ansible.builtin.set_fact:
+        awx_api_headers:
+          Authorization: "Bearer {{ awx_oauth_token | trim }}"
+          Content-Type: application/json
+
+  tasks:
+    - name: Lookup execution environment by name
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/execution_environments/?name={{ awx_execution_environment_name | urlencode }}"
+        method: GET
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code: 200
+      register: ee_lookup
+
+    - name: Create execution environment when missing
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/execution_environments/"
+        method: POST
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          name: "{{ awx_execution_environment_name }}"
+          image: "{{ awx_execution_environment_image }}"
+          organization: "{{ awx_org_id | int }}"
+          pull: always
+        status_code: 201
+      when: (ee_lookup.json.count | int) == 0
+      register: ee_created
+
+    - name: Update existing execution environment
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/execution_environments/{{ ee_lookup.json.results[0].id }}/"
+        method: PATCH
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          image: "{{ awx_execution_environment_image }}"
+          organization: "{{ awx_org_id | int }}"
+          pull: always
+        status_code: 200
+      when: (ee_lookup.json.count | int) > 0
+      register: ee_updated
+
+    - name: Set execution environment id
+      ansible.builtin.set_fact:
+        awx_execution_environment_id: >-
+          {{
+            (ee_created.json.id | int)
+            if (ee_created is defined and ee_created.json is defined)
+            else (ee_lookup.json.results[0].id | int)
+          }}
+
+    - name: Lookup job template by name in organization
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/job_templates/?name={{ awx_job_template_name | urlencode }}&organization={{ awx_org_id | int }}"
+        method: GET
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code: 200
+      register: jt_lookup
+
+    - name: Fail when job template is not found
+      ansible.builtin.fail:
+        msg: "Job template '{{ awx_job_template_name }}' not found in organization ID {{ awx_org_id }}"
+      when: (jt_lookup.json.count | int) == 0
+
+    - name: Patch job template to use execution environment
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/job_templates/{{ jt_lookup.json.results[0].id }}/"
+        method: PATCH
+        headers: "{{ awx_api_headers }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        body_format: json
+        body:
+          execution_environment: "{{ awx_execution_environment_id | int }}"
+        status_code: 200
+      register: jt_patched
+
+    - name: Show result summary
+      ansible.builtin.debug:
+        msg:
+          image_verified: true
+          execution_environment_name: "{{ awx_execution_environment_name }}"
+          execution_environment_id: "{{ awx_execution_environment_id }}"
+          job_template_id: "{{ jt_lookup.json.results[0].id }}"
+          patched: "{{ jt_patched.status == 200 }}"

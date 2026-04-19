@@ -4,6 +4,11 @@
   gather_facts: false
   vars_files:
     - ../../vars/awx_resources.yml
+  vars:
+    awx_manage_organization: true
+    awx_manage_execution_environment_effective: "{{ awx_manage_execution_environment | default(true) }}"
+    awx_job_template_execution_environment_effective: "{{ awx_job_template_execution_environment | default(awx_execution_environment_name) }}"
+    awx_organization_ref: "{{ awx_org_id | default(awx_org_name) }}"
   collections:
     - awx.awx
 
@@ -16,34 +21,67 @@
           - awx_project_scm_url | length > 0
         fail_msg: "Set AWX_HOST, AWX_OAUTH_TOKEN, and awx_project_scm_url (or use inventories/group_vars/all/awx.yml)"
 
+    - name: Validate AWX organizations API with current token
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/organizations/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_oauth_token | trim }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code: 200
+
+    - name: Check AWX execution environments API access
+      ansible.builtin.uri:
+        url: "{{ awx_host }}/api/v2/execution_environments/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_oauth_token | trim }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        status_code:
+          - 200
+          - 403
+      register: ee_api_check
+
+    - name: Fail when EE management is enabled but token cannot access EE API
+      ansible.builtin.fail:
+        msg: >-
+          Token cannot access /api/v2/execution_environments/ (HTTP {{ ee_api_check.status }}).
+          Re-run with -e awx_manage_execution_environment=false and optionally
+          -e awx_job_template_execution_environment='Default execution environment'.
+      when:
+        - awx_manage_execution_environment_effective | bool
+        - ee_api_check.status | int == 403
+
   tasks:
     - name: Create organization
       awx.awx.organization:
         controller_host: "{{ awx_host }}"
-        controller_oauthtoken: "{{ awx_oauth_token }}"
+        controller_oauthtoken: "{{ awx_oauth_token | trim }}"
         validate_certs: "{{ awx_validate_certs }}"
         name: "{{ awx_org_name }}"
         state: present
+      when: awx_manage_organization | bool
 
     - name: Create execution environment
       awx.awx.execution_environment:
         controller_host: "{{ awx_host }}"
-        controller_oauthtoken: "{{ awx_oauth_token }}"
+        controller_oauthtoken: "{{ awx_oauth_token | trim }}"
         validate_certs: "{{ awx_validate_certs }}"
         name: "{{ awx_execution_environment_name }}"
         image: "{{ awx_execution_environment_image }}"
-        organization: "{{ awx_org_name }}"
+        organization: "{{ awx_organization_ref }}"
         pull: always
         state: present
+      when: awx_manage_execution_environment_effective | bool
 
     - name: Create project (SCM)
       awx.awx.project:
         controller_host: "{{ awx_host }}"
-        controller_oauthtoken: "{{ awx_oauth_token }}"
+        controller_oauthtoken: "{{ awx_oauth_token | trim }}"
         validate_certs: "{{ awx_validate_certs }}"
         name: "{{ awx_project_name }}"
         description: "{{ awx_project_description }}"
-        organization: "{{ awx_org_name }}"
+        organization: "{{ awx_organization_ref }}"
         scm_type: git
         scm_url: "{{ awx_project_scm_url }}"
         scm_branch: "{{ awx_project_scm_branch }}"
@@ -54,17 +92,17 @@
     - name: Create inventory
       awx.awx.inventory:
         controller_host: "{{ awx_host }}"
-        controller_oauthtoken: "{{ awx_oauth_token }}"
+        controller_oauthtoken: "{{ awx_oauth_token | trim }}"
         validate_certs: "{{ awx_validate_certs }}"
         name: "{{ awx_inventory_name }}"
         description: "{{ awx_inventory_description }}"
-        organization: "{{ awx_org_name }}"
+        organization: "{{ awx_organization_ref }}"
         state: present
 
     - name: Add localhost host to inventory
       awx.awx.host:
         controller_host: "{{ awx_host }}"
-        controller_oauthtoken: "{{ awx_oauth_token }}"
+        controller_oauthtoken: "{{ awx_oauth_token | trim }}"
         validate_certs: "{{ awx_validate_certs }}"
         name: localhost
         inventory: "{{ awx_inventory_name }}"
@@ -73,26 +111,42 @@
           ansible_connection: local
         state: present
 
-    - name: Create job template
+    - name: Create job template (with explicit EE)
       awx.awx.job_template:
         controller_host: "{{ awx_host }}"
-        controller_oauthtoken: "{{ awx_oauth_token }}"
+        controller_oauthtoken: "{{ awx_oauth_token | trim }}"
         validate_certs: "{{ awx_validate_certs }}"
         name: "{{ awx_job_template_name }}"
         description: "{{ awx_job_template_description }}"
-        organization: "{{ awx_org_name }}"
+        organization: "{{ awx_organization_ref }}"
         project: "{{ awx_project_name }}"
         inventory: "{{ awx_inventory_name }}"
         playbook: "{{ awx_job_template_playbook }}"
-        execution_environment: "{{ awx_execution_environment_name }}"
+        execution_environment: "{{ awx_job_template_execution_environment_effective }}"
         ask_variables_on_launch: false
         state: present
+      when: awx_job_template_execution_environment_effective | length > 0
+
+    - name: Create job template (use AWX default EE)
+      awx.awx.job_template:
+        controller_host: "{{ awx_host }}"
+        controller_oauthtoken: "{{ awx_oauth_token | trim }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        name: "{{ awx_job_template_name }}"
+        description: "{{ awx_job_template_description }}"
+        organization: "{{ awx_organization_ref }}"
+        project: "{{ awx_project_name }}"
+        inventory: "{{ awx_inventory_name }}"
+        playbook: "{{ awx_job_template_playbook }}"
+        ask_variables_on_launch: false
+        state: present
+      when: awx_job_template_execution_environment_effective | length == 0
 
     - name: Force project sync once after create/update
       awx.awx.project_update:
         controller_host: "{{ awx_host }}"
-        controller_oauthtoken: "{{ awx_oauth_token }}"
+        controller_oauthtoken: "{{ awx_oauth_token | trim }}"
         validate_certs: "{{ awx_validate_certs }}"
         name: "{{ awx_project_name }}"
-        organization: "{{ awx_org_name }}"
+        organization: "{{ awx_organization_ref }}"
         wait: true
